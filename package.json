@@ -1,0 +1,17 @@
+{
+  "name": "itps-dlx-test",
+  "version": "0.3.0",
+  "description": "CLI de inicialização do ITpS Design System em projetos consumidores.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "bin": {
+    "itps": "./bin/itps.js"
+  },
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}
