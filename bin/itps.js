@@ -6,7 +6,7 @@ import process from "node:process";
 
 const VERSION = "0.3.0";
 const DEFAULT_STYLES_PACKAGE =
-  "https://github.com/DevJanderson/itps-dlx-test/releases/download/v0.3.0-test/itps-styles-0.3.0.tgz";
+  "https://github.com/DevJanderson/sinapse-ui-cli/releases/download/v0.3.0-test/itps-styles-0.3.0.tgz";
 const INLINE_START = "/* itps-theme:start */";
 const INLINE_END = "/* itps-theme:end */";
 const LEGACY_INLINE_START = "/* sinapse-theme:start */";

@@ -1,5 +1,5 @@
 {
-  "name": "itps-dlx-test",
+  "name": "sinapse-ui-cli",
   "version": "0.3.0",
   "description": "CLI de inicialização do ITpS Design System em projetos consumidores.",
   "type": "module",
