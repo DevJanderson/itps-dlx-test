@@ -11,6 +11,7 @@ const INLINE_START = "/* itps-theme:start */";
 const INLINE_END = "/* itps-theme:end */";
 const LEGACY_INLINE_START = "/* sinapse-theme:start */";
 const LEGACY_INLINE_END = "/* sinapse-theme:end */";
+const INIT_VALUE_FLAGS = new Set(["--css", "--package"]);
 
 const CSS_CANDIDATES = [
   "src/index.css",
@@ -36,10 +37,46 @@ const BUTTON_CANDIDATES = [
   "app/components/ui/button/index.ts",
 ];
 
-const LEGACY_SINAPSE_BUTTON_VARIANT_PATTERN = /\n\s*sinapse:\n\s*"rounded-form border border-primary-900 bg-background text-info hover:border-primary-900 hover:bg-primary hover:text-primary-foreground active:border-primary-900 active:bg-primary active:text-primary-foreground",?/;
+const COMPONENT_SLUGS = [
+  "avatar",
+  "banner",
+  "breadcrumb",
+  "button",
+  "callout",
+  "card",
+  "checkbox",
+  "chip",
+  "data-overlay",
+  "feature-card",
+  "field",
+  "footer",
+  "link",
+  "modal",
+  "nav-icon",
+  "pagination",
+  "risk-classification",
+  "search",
+  "select",
+  "side-panel",
+  "switch",
+  "tabs",
+  "tag",
+  "textfield",
+  "toast",
+  "tooltip",
+  "wavy-divider",
+];
+
+const PACKAGE_MANAGER_LOCKS = [
+  { name: "pnpm", locks: ["pnpm-lock.yaml"] },
+  { name: "yarn", locks: ["yarn.lock"] },
+  { name: "bun", locks: ["bun.lockb", "bun.lock"] },
+];
+
+const LEGACY_SINAPSE_BUTTON_VARIANT_PATTERN = /\n\s*sinapse:\n\s*["']rounded-form border border-primary-900 bg-background text-info hover:border-primary-900 hover:bg-primary hover:text-primary-foreground active:border-primary-900 active:bg-primary active:text-primary-foreground["'],?/;
 const LEGACY_ITPS_BUTTON_ROUNDED_PREFIX_PATTERNS = [
-  /(\n\s*itps:\n\s*")rounded-form\s+/,
-  /(\n\s*itpsSecondary:\n\s*")rounded-form\s+/,
+  /(\n\s*itps:\n\s*["'])rounded-form\s+/,
+  /(\n\s*itpsSecondary:\n\s*["'])rounded-form\s+/,
 ];
 const THEME_DECLARATIONS = new Set([
   "--background",
@@ -48,6 +85,8 @@ const THEME_DECLARATIONS = new Set([
   "--card-foreground",
   "--popover",
   "--popover-foreground",
+  "--brand",
+  "--brand-foreground",
   "--primary",
   "--primary-foreground",
   "--secondary",
@@ -83,8 +122,13 @@ const COMMAND_HANDLERS = {
   "-h": () => printHelp(),
   "--version": () => console.log(VERSION),
   "-v": () => console.log(VERSION),
+  add: (args) => runAdd(parseAddArgs(args)),
   init: (args) => runInit(parseInitArgs(args)),
 };
+
+const COMPONENT_ADD_HANDLERS = Object.fromEntries(
+  COMPONENT_SLUGS.map((slug) => [slug, slug === "button" ? addButton : addThemeOnlyComponent]),
+);
 
 function main() {
   const [command = "help", ...args] = process.argv.slice(2);
@@ -114,23 +158,29 @@ function parseInitArgs(args) {
 
 function applyInitArg(options, args, index) {
   const arg = args[index];
-  const equals = arg.match(/^(--css|--package)=(.+)$/);
-
-  if (equals) {
-    assignInitValue(options, equals[1], equals[2]);
-    return 0;
-  }
-
-  if (arg === "--css" || arg === "--package") {
-    assignInitValue(options, arg, readValue(args, index, arg));
-    return 1;
-  }
+  const valueArg = parseInitValueArg(args, index);
+  if (valueArg) return applyInitValueArg(options, valueArg);
 
   if (applyBooleanInitArg(options, arg)) {
     return 0;
   }
 
   fail(`Opcao desconhecida: ${arg}`);
+}
+
+function parseInitValueArg(args, index) {
+  const arg = args[index];
+  const equals = arg.match(/^(--css|--package)=(.+)$/);
+  if (equals) return { flag: equals[1], value: equals[2], consumed: 0 };
+
+  if (!INIT_VALUE_FLAGS.has(arg)) return undefined;
+
+  return { flag: arg, value: readValue(args, index, arg), consumed: 1 };
+}
+
+function applyInitValueArg(options, { flag, value, consumed }) {
+  assignInitValue(options, flag, value);
+  return consumed;
 }
 
 function assignInitValue(options, flag, value) {
@@ -160,6 +210,111 @@ function applyBooleanInitArg(options, arg) {
 
   handler();
   return true;
+}
+
+function parseAddArgs(args) {
+  const options = {
+    component: undefined,
+    dryRun: false,
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    index += applyAddArg(options, args, index);
+  }
+
+  if (!options.component) {
+    fail(`Informe o componente. Suportados: ${formatSupportedComponents()}.`);
+  }
+
+  return options;
+}
+
+function applyAddArg(options, args, index) {
+  const arg = args[index];
+
+  if (arg === "--dry-run") {
+    options.dryRun = true;
+    return 0;
+  }
+
+  if (arg.startsWith("--")) {
+    fail(`Opcao desconhecida: ${arg}`);
+  }
+
+  if (options.component) {
+    fail(`Componente inesperado: ${arg}. Suportados: ${formatSupportedComponents()}.`);
+  }
+
+  options.component = arg;
+  return 0;
+}
+
+function runAdd(options) {
+  const root = process.cwd();
+  assertConsumerRoot(root);
+  const handler = COMPONENT_ADD_HANDLERS[options.component];
+
+  if (!handler) {
+    fail(`Componente nao suportado: ${options.component}. Suportados: ${formatSupportedComponents()}.`);
+  }
+
+  handler({ root, options });
+}
+
+function formatSupportedComponents() {
+  return COMPONENT_SLUGS.join(", ");
+}
+
+function addButton({ root, options }) {
+  const buttonPath = resolveButtonPath(root);
+  if (!buttonPath) {
+    fail(
+      [
+        "Button shadcn nao encontrado.",
+        "Crie o componente primeiro com `pnpm dlx shadcn@latest add button` ou `pnpm dlx shadcn-vue@latest add button`.",
+        "Depois rode `itps add button` novamente.",
+      ].join(" "),
+    );
+  }
+
+  const buttonPatch = getButtonPatch(buttonPath);
+  if (options.dryRun) {
+    printAddButtonDryRun({ buttonPatch, root });
+    return;
+  }
+
+  writeButtonPatch({ buttonPatch, root });
+}
+
+function printAddButtonDryRun({ buttonPatch, root }) {
+  console.log("ITpS add button em modo dry-run.");
+  if (buttonPatch.changed) {
+    console.log(`Variants itps seriam adicionadas em ${relative(root, buttonPatch.path)}.`);
+    return;
+  }
+
+  console.log(`${relative(root, buttonPatch.path)} ja possui variants itps.`);
+}
+
+function addThemeOnlyComponent({ options }) {
+  if (options.dryRun) {
+    printThemeOnlyDryRun(options.component);
+    return;
+  }
+
+  printThemeOnlyApplied(options.component);
+}
+
+function printThemeOnlyDryRun(component) {
+  console.log(`ITpS add ${component} em modo dry-run.`);
+  console.log("Este componente usa o tema ITpS e os snippets documentados.");
+  console.log("Nenhum arquivo seria alterado.");
+}
+
+function printThemeOnlyApplied(component) {
+  console.log(`ITpS add ${component} concluido.`);
+  console.log("Este componente usa o tema ITpS e os snippets documentados.");
+  console.log("Nenhum arquivo foi alterado.");
 }
 
 function runInit(options) {
@@ -219,28 +374,44 @@ function buildInitSteps(root, cssPath, packageManager, options) {
 
 function printDryRun(context, options) {
   console.log("ITpS init em modo dry-run.");
-  for (const step of buildInitSteps(context.root, context.cssPath, context.packageManager, options)) {
-    console.log(`- ${step}`);
-  }
+  printInitSteps(context, options);
 
   if (!context.theme) {
-    console.log(
-      "\nCSS resultante indisponivel no dry-run inline porque @itps/styles ainda nao esta instalado.",
-    );
-    console.log("Rode sem --dry-run para instalar e aplicar, ou instale @itps/styles antes.");
+    printMissingThemeDryRun();
     return;
   }
 
-  if (context.before !== context.after) {
-    console.log("\nCSS resultante:\n");
-    console.log(context.after);
-  } else {
+  printCssDryRun(context);
+  printButtonDryRun(context);
+}
+
+function printInitSteps(context, options) {
+  for (const step of buildInitSteps(context.root, context.cssPath, context.packageManager, options)) {
+    console.log(`- ${step}`);
+  }
+}
+
+function printMissingThemeDryRun() {
+  console.log(
+    "\nCSS resultante indisponivel no dry-run inline porque @itps/styles ainda nao esta instalado.",
+  );
+  console.log("Rode sem --dry-run para instalar e aplicar, ou instale @itps/styles antes.");
+}
+
+function printCssDryRun({ after, before }) {
+  if (before === after) {
     console.log("\nCSS ja estava configurado.");
+    return;
   }
 
-  if (context.buttonPatch?.changed) {
-    console.log(`\nVariants itps seriam adicionadas em ${relative(context.root, context.buttonPatch.path)}.`);
-  }
+  console.log("\nCSS resultante:\n");
+  console.log(after);
+}
+
+function printButtonDryRun({ buttonPatch, root }) {
+  if (!buttonPatch?.changed) return;
+
+  console.log(`\nVariants itps seriam adicionadas em ${relative(root, buttonPatch.path)}.`);
 }
 
 function writeCssResult({ after, before, cssPath, root }) {
@@ -259,7 +430,7 @@ function printAppliedTheme() {
 
 function writeButtonPatch({ buttonPatch, root }) {
   if (!buttonPatch) {
-    console.log("Button shadcn nao encontrado; rode o init novamente depois de adicionar components/ui/button.tsx.");
+    console.log("Button shadcn nao encontrado; rode o init novamente depois de adicionar components/ui/button.");
     return;
   }
 
@@ -273,22 +444,10 @@ function writeButtonPatch({ buttonPatch, root }) {
 }
 
 function resolveCssPath(root, explicitCssPath) {
-  if (explicitCssPath) {
-    const cssPath = isAbsolute(explicitCssPath)
-      ? explicitCssPath
-      : resolve(root, explicitCssPath);
-    if (!existsSync(cssPath)) {
-      fail(`Arquivo CSS nao encontrado: ${explicitCssPath}`);
-    }
-    return cssPath;
-  }
+  if (explicitCssPath) return resolveExplicitCssPath(root, explicitCssPath);
 
-  for (const candidate of CSS_CANDIDATES) {
-    const cssPath = join(root, candidate);
-    if (existsSync(cssPath)) {
-      return cssPath;
-    }
-  }
+  const detectedPath = CSS_CANDIDATES.map((candidate) => join(root, candidate)).find(existsSync);
+  if (detectedPath) return detectedPath;
 
   fail(
     [
@@ -296,6 +455,18 @@ function resolveCssPath(root, explicitCssPath) {
       "Use --css caminho/do/arquivo.css para informar explicitamente.",
     ].join(" "),
   );
+}
+
+function resolveExplicitCssPath(root, explicitCssPath) {
+  const cssPath = isAbsolute(explicitCssPath)
+    ? explicitCssPath
+    : resolve(root, explicitCssPath);
+
+  if (!existsSync(cssPath)) {
+    fail(`Arquivo CSS nao encontrado: ${explicitCssPath}`);
+  }
+
+  return cssPath;
 }
 
 function resolveButtonPath(root) {
@@ -316,7 +487,17 @@ function getButtonPatch(buttonPath) {
 }
 
 function patchButtonSource(source) {
-  return patchButtonAttributes(patchButtonVariant(source));
+  return patchButtonAttributes(patchButtonBaseClass(patchButtonVariant(source)));
+}
+
+function patchButtonBaseClass(source) {
+  return source.replace(/(\bcva\(\s*)(["'`])([\s\S]*?)(\2)/, (match, prefix, quote, classes, suffix) => {
+    if (classes.split(/\s+/).includes("cursor-pointer")) {
+      return match;
+    }
+
+    return `${prefix}${quote}${insertClassName(classes, "cursor-pointer")}${suffix}`;
+  });
 }
 
 function patchButtonVariant(source) {
@@ -345,21 +526,42 @@ function normalizeButtonVariants(source) {
     output = output.replace(pattern, "$1");
   }
 
+  output = normalizeItpsButtonVariantClasses(output);
   output = ensureVariantClass(output, "itps", "cursor-pointer");
   output = ensureVariantClass(output, "itpsSecondary", "cursor-pointer");
 
   return output;
 }
 
+function normalizeItpsButtonVariantClasses(source) {
+  const pattern = /(\n\s*itps:\n\s*)(["'])([^\n]*?)(\2)/;
+  return source.replace(pattern, (match, prefix, quote, classes, suffix) => {
+    const normalizedClasses = classes
+      .replace(/\bborder-primary-900\b/g, "border-brand")
+      .replace(/\bbg-primary(?=\/|\s|$)/g, "bg-brand")
+      .replace(/\btext-primary-foreground\b/g, "text-brand-foreground");
+
+    if (normalizedClasses === classes) {
+      return match;
+    }
+
+    return `${prefix}${quote}${normalizedClasses}${suffix}`;
+  });
+}
+
 function ensureVariantClass(source, variantName, className) {
-  const pattern = new RegExp(`(\\n\\s*${variantName}:\\n\\s*")([^"]*)(")`);
-  return source.replace(pattern, (match, prefix, classes, suffix) => {
+  const pattern = new RegExp(`(\\n\\s*${variantName}:\\n\\s*)(["'])([^\\n]*?)(\\2)`);
+  return source.replace(pattern, (match, prefix, quote, classes, suffix) => {
     if (classes.split(/\s+/).includes(className)) {
       return match;
     }
 
-    return `${prefix}${className} ${classes}${suffix}`;
+    return `${prefix}${quote}${insertClassName(classes, className)}${suffix}`;
   });
+}
+
+function insertClassName(classes, className) {
+  return `${className} ${classes}`.trim();
 }
 
 function getMissingButtonVariants(source) {
@@ -367,7 +569,7 @@ function getMissingButtonVariants(source) {
   if (!/\bitps\s*:/.test(source)) {
     variants.push(
       '        itps:',
-      '          "cursor-pointer border border-primary-900 bg-background text-info hover:border-primary-900 hover:bg-primary hover:text-primary-foreground active:border-primary-900 active:bg-primary active:text-primary-foreground",',
+      '          "cursor-pointer border border-brand bg-background text-info hover:border-brand hover:bg-brand hover:text-brand-foreground active:border-brand active:bg-brand active:text-brand-foreground",',
     );
   }
   if (!/\bitpsSecondary\s*:/.test(source)) {
@@ -537,6 +739,10 @@ function findNextBlock(css, selector, cursor) {
     return { kind: "skip", cursor: start + selector.length };
   }
 
+  return findBlockAt(css, selector, start);
+}
+
+function findBlockAt(css, selector, start) {
   const open = css.indexOf("{", start + selector.length);
   if (open === -1) {
     return { kind: "done" };
@@ -575,13 +781,11 @@ function getDeclarationNames(body) {
 
 function trimBlockBody(body) {
   const lines = body.split("\n");
-  while (lines.length > 0 && !lines[0].trim()) {
-    lines.shift();
-  }
-  while (lines.length > 0 && !lines.at(-1).trim()) {
-    lines.pop();
-  }
-  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
+  const start = lines.findIndex((line) => line.trim());
+  if (start === -1) return "";
+
+  const end = lines.findLastIndex((line) => line.trim());
+  return `${lines.slice(start, end + 1).join("\n")}\n`;
 }
 
 function insertTheme(css, theme) {
@@ -614,21 +818,29 @@ function findMatchingBrace(source, openIndex) {
   let quote = "";
 
   for (let index = openIndex; index < source.length; index += 1) {
-    const char = source[index];
-
-    if (quote || isQuote(char)) {
-      quote = nextQuoteState(quote, char, source[index - 1]);
-      continue;
-    }
-
-    const result = readBrace(char, depth);
+    const result = readBraceScan(source, index, depth, quote);
     depth = result.depth;
+    quote = result.quote;
     if (result.closed) {
       return index;
     }
   }
 
   return -1;
+}
+
+function readBraceScan(source, index, depth, quote) {
+  const char = source[index];
+  if (quote || isQuote(char)) {
+    return {
+      depth,
+      quote: nextQuoteState(quote, char, source[index - 1]),
+      closed: false,
+    };
+  }
+
+  const result = readBrace(char, depth);
+  return { ...result, quote };
 }
 
 function nextQuoteState(quote, char, previous) {
@@ -656,16 +868,10 @@ function isQuote(char) {
 }
 
 function detectPackageManager(root) {
-  if (existsSync(join(root, "pnpm-lock.yaml"))) {
-    return "pnpm";
-  }
-  if (existsSync(join(root, "yarn.lock"))) {
-    return "yarn";
-  }
-  if (existsSync(join(root, "bun.lockb")) || existsSync(join(root, "bun.lock"))) {
-    return "bun";
-  }
-  return "npm";
+  const match = PACKAGE_MANAGER_LOCKS.find(({ locks }) =>
+    locks.some((lock) => existsSync(join(root, lock))),
+  );
+  return match ? match.name : "npm";
 }
 
 function runPackageInstall(packageManager, packageSpec) {
@@ -710,10 +916,11 @@ function printHelp() {
 
 Uso:
   itps init [opcoes]
+  itps add <componente> [opcoes]
 
 Opcoes:
   --css <arquivo>        CSS global a alterar, quando a deteccao automatica nao bastar
-  --package <specifier>  Pacote a instalar (default: styles tarball da GitHub Release)
+  --package <specifier>  Pacote a instalar (default: styles tarball da release de teste)
   --skip-install         Nao executar package manager add
   --inline               Compatibilidade: o init ja escreve inline por padrao
   --dry-run              Mostrar mudancas sem escrever arquivos
@@ -723,6 +930,9 @@ Exemplos:
   itps init --dry-run
   itps init --css src/index.css --package /tmp/itps-styles-0.3.0.tgz
   itps init --skip-install
+  itps add button
+  itps add modal
+  itps add button --dry-run
 `);
 }
 
